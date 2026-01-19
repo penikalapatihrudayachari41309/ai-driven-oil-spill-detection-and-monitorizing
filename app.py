@@ -19,8 +19,8 @@ DEFAULT_MODEL_PATHS = [
     os.path.join("/app", MODEL_FILENAME),              # some hosts use /app
 ]
 
-# Environment variable used to optionally download a model at startup
-MODEL_DOWNLOAD_URL = os.getenv("MODEL_DOWNLOAD_URL")
+# Hardcoded model download URL (Drive direct download). This will be used unless you set the MODEL_DOWNLOAD_URL environment variable.
+MODEL_DOWNLOAD_URL = os.getenv("MODEL_DOWNLOAD_URL", "https://drive.google.com/uc?export=download&id=1HhwuiRyNsDk8rw48uHfDxYiKe0tdbnlA")
 
 # --- Helper Functions --- #
 @st.cache_resource
@@ -45,19 +45,25 @@ def load_model_from_path(model_path: str):
 
 def download_model_if_needed(download_url: str, save_dir: str, filename: str):
     """Download the model from a URL into save_dir/filename if not already present. Returns path or None."""
-    if not download_url:
-        return None
+    if not download_url or "drive.google.com/uc?export=download" not in download_url:
+        # still attempt for other URLs; keep the check minimal
+        pass
     os.makedirs(save_dir, exist_ok=True)
     dest_path = os.path.join(save_dir, filename)
     if os.path.exists(dest_path):
         return dest_path
     try:
-        with requests.get(download_url, stream=True, timeout=30) as r:
+        with requests.get(download_url, stream=True, timeout=60) as r:
             r.raise_for_status()
+            total = int(r.headers.get('content-length', 0))
+            chunk_size = 8192
             with open(dest_path, 'wb') as f:
-                for chunk in r.iter_content(chunk_size=8192):
+                # show a simple progress in logs; Streamlit progress requires main thread
+                downloaded = 0
+                for chunk in r.iter_content(chunk_size=chunk_size):
                     if chunk:
                         f.write(chunk)
+                        downloaded += len(chunk)
         return dest_path
     except Exception as e:
         st.warning(f"Failed to download model from {download_url}: {e}")
@@ -115,16 +121,16 @@ def app_main():
     st.title("Oil Spill Detection Application")
     st.write("Upload a SAR image to detect oil spills.")
 
-    # If MODEL_DOWNLOAD_URL is provided, attempt to download into ./models/
+    # If MODEL_DOWNLOAD_URL is provided (or hardcoded), attempt to download into ./models/
     model = None
-    if MODEL_DOWNLOAD_URL:
-        st.info(f"MODEL_DOWNLOAD_URL is set. Attempting to download model from: {MODEL_DOWNLOAD_URL}")
+    if MODEL_DOWNLOAD_URL and "drive.google.com/uc?export=download" in MODEL_DOWNLOAD_URL:
+        st.info("MODEL_DOWNLOAD_URL is configured. Attempting to download model from Drive link...")
         downloaded = download_model_if_needed(MODEL_DOWNLOAD_URL, os.path.join(os.path.dirname(__file__), 'models'), MODEL_FILENAME)
         if downloaded:
             st.success(f"Model downloaded to: {downloaded}")
             model = load_model_from_path(downloaded)
         else:
-            st.warning("Model download failed or the file was not available at the provided URL.")
+            st.warning("Model download failed or the file was not available at the provided URL. Ensure the Drive file is shared publicly and not too large for Drive's browser confirmation.")
 
     # Try to find an existing model on disk using common locations or an env var
     if model is None:
@@ -133,29 +139,13 @@ def app_main():
             st.info(f"Loading model from: {existing_model_path}")
             model = load_model_from_path(existing_model_path)
             if model is None:
-                st.warning("Found a model path but loading failed. You can upload a model below or fix the model path.")
+                st.warning("Found a model path but loading failed. You can set MODEL_DOWNLOAD_URL or add the model to the server.")
         else:
             st.warning(
-                "No model file found on the server. You can upload a model file (.keras or .h5) using the 'Upload model' control below, \
-                or set the environment variable MODEL_PATH or MODEL_DOWNLOAD_URL to a valid path/URL before deploying."
+                "No model file found on the server. You can set the MODEL_DOWNLOAD_URL constant in the app or set the MODEL_PATH env var."
             )
 
-    # Allow user to upload a model if not found or to override
-    st.subheader("Model")
-    uploaded_model_file = st.file_uploader(
-        "Upload .keras or .h5 model (optional, will be used if provided)",
-        type=["keras", "h5", "zip"]
-    )
-    if uploaded_model_file is not None:
-        # Save uploaded model to a temp file and load from there
-        with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(uploaded_model_file.name)[1]) as tfp:
-            tfp.write(uploaded_model_file.getvalue())
-            tmp_model_path = tfp.name
-        st.info(f"Attempting to load uploaded model: {uploaded_model_file.name}")
-        model = load_model_from_path(tmp_model_path)
-        if model is None:
-            st.error("Uploaded model could not be loaded. Check model compatibility (TensorFlow .keras or .h5).")
-
+    # Image uploader (no model upload UI — model must come from code/server)
     uploaded_file = st.file_uploader("Choose an image..", type=["png", "jpg", "jpeg"]) 
 
     if uploaded_file is not None:
@@ -166,7 +156,7 @@ def app_main():
         original_size = original_image.size  # (width, height)
 
         if model is not None:
-            with st.spinner("Processing image and detecting spills..."):
+            with st.spinner("Processing image and detecting spills..."): 
                 try:
                     processed_image = preprocess_image_for_prediction(original_image)
                     # Ensure model returns a prediction shape we can work with
@@ -219,7 +209,7 @@ def app_main():
                 except Exception as e:
                     st.exception(f"Error during prediction/display: {e}")
         else:
-            st.error("Model could not be loaded. Upload a model above or ensure MODEL_PATH/MODEL_DOWNLOAD_URL points to a valid .keras file and redeploy.")
+            st.error("Model could not be loaded. Ensure the Drive file is public and the URL is correct, or place the model on the server.")
 
 if __name__ == '__main__':
     app_main()
