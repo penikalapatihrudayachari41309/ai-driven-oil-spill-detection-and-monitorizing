@@ -123,4 +123,3 @@ def app_main():
             st.error("Model could not be loaded. Please check the console for errors.")
 
 if __name__ == "__main__":
-    app_main()
