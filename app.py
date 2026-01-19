@@ -1,6 +1,1 @@
-import gdown
-
-# Use gdown to download files from Google Drive
-
-def download_file_from_drive(file_url, output_path):
-    gdown.download(file_url, output_path, quiet=False)
+# Updated app.py\n\nimport os\nfrom flask import Flask, request, render_template\n\napp = Flask(__name__)\n\n# Existing code for initializing the application\n\n@app.route('/', methods=['GET', 'POST'])\ndef upload_model():\n    if request.method == 'POST':\n        model_file = request.files['model_file']\n        if model_file:  \n            model_file.save(os.path.join('models', model_file.filename))\n            return 'Model uploaded successfully!'\n        return 'Failed to upload model.'\n    return render_template('upload.html')\n\n# Fallback code for downloading model from Drive\n\nif __name__ == '__main__':\n    app.run(debug=True)
