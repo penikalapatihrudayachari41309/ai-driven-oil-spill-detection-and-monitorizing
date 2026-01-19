@@ -3,40 +3,60 @@ import tensorflow as tf
 import numpy as np
 import PIL.Image
 import os
+import zipfile
 from io import BytesIO
-import tempfile
 
 # --- Configuration --- #
 TARGET_SIZE = (128, 128)
-MODEL_FILENAME = f'unet_oil_spill_segmentation_model_{TARGET_SIZE[0]}x{TARGET_SIZE[1]}.keras'
 
-# Model is ALREADY in repo → no download
-DEFAULT_MODEL_PATHS = [
-    os.path.join(os.path.dirname(__file__), MODEL_FILENAME),            # repo root
-    os.path.join(os.path.dirname(__file__), "models", MODEL_FILENAME),  # models/
+MODEL_ZIP = f"unet_oil_spill_segmentation_model_{TARGET_SIZE[0]}x{TARGET_SIZE[1]}.zip"
+MODEL_FILENAME = f"unet_oil_spill_segmentation_model_{TARGET_SIZE[0]}x{TARGET_SIZE[1]}.keras"
+
+BASE_DIR = os.path.dirname(__file__)
+EXTRACT_DIR = os.path.join(BASE_DIR, "extracted_model")
+
+# Possible ZIP locations in repo
+MODEL_ZIP_PATHS = [
+    os.path.join(BASE_DIR, MODEL_ZIP),
+    os.path.join(BASE_DIR, "models", MODEL_ZIP),
 ]
 
 # --- Helper Functions --- #
 @st.cache_resource
-def load_model_from_path(model_path: str):
-    if not model_path:
+def extract_and_load_model():
+    os.makedirs(EXTRACT_DIR, exist_ok=True)
+
+    zip_path = None
+    for p in MODEL_ZIP_PATHS:
+        if os.path.exists(p):
+            zip_path = p
+            break
+
+    if zip_path is None:
+        st.error("Model ZIP file not found in repository.")
         return None
-    try:
-        try:
-            tf.keras.mixed_precision.set_global_policy("mixed_float16")
-        except Exception:
-            pass
 
-        return tf.keras.models.load_model(model_path, compile=False)
-    except Exception as e:
-        st.exception(f"Error loading model from {model_path}: {e}")
-        return None
+    # Extract ZIP only once
+    with zipfile.ZipFile(zip_path, "r") as zip_ref:
+        zip_ref.extractall(EXTRACT_DIR)
 
+    # Find .keras file
+    for root, _, files in os.walk(EXTRACT_DIR):
+        for f in files:
+            if f.endswith(".keras"):
+                model_path = os.path.join(root, f)
+                try:
+                    try:
+                        tf.keras.mixed_precision.set_global_policy("mixed_float16")
+                    except Exception:
+                        pass
 
-def find_existing_model_path():
-    for path in DEFAULT_MODEL_PATHS:
-        if os.path.exists(path):
-            return path
+                    return tf.keras.models.load_model(model_path, compile=False)
+                except Exception as e:
+                    st.exception(f"Failed to load model: {e}")
+                    return None
+
+    st.error("No .keras model found inside ZIP.")
     return None
 
 
@@ -69,15 +89,11 @@ def app_main():
     st.title("Oil Spill Detection Application")
     st.write("Upload a SAR image to detect oil spills.")
 
-    model = None
+    # ✅ Load model from ZIP in repo
+    model = extract_and_load_model()
 
-    # ✅ Load model from repo
-    model_path = find_existing_model_path()
-    if model_path:
-        st.success(f"Loaded model from repo: {os.path.basename(model_path)}")
-        model = load_model_from_path(model_path)
-    else:
-        st.error("Model file not found in repository.")
+    if model:
+        st.success("Model loaded successfully from ZIP file.")
 
     uploaded_file = st.file_uploader(
         "Choose an image", type=["png", "jpg", "jpeg"]
@@ -108,7 +124,7 @@ def app_main():
             with col2:
                 st.image(overlay, caption="Overlay Result", use_column_width=True)
 
-            # Downloads
+            # Download
             st.subheader("Download Results")
             buf = BytesIO()
             PIL.Image.fromarray(mask).save(buf, format="PNG")
