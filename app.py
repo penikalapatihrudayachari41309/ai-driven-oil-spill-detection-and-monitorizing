@@ -5,25 +5,15 @@ import PIL.Image
 import os
 from io import BytesIO
 import tempfile
-import requests
 
 # --- Configuration --- #
 TARGET_SIZE = (128, 128)
 MODEL_FILENAME = f'unet_oil_spill_segmentation_model_{TARGET_SIZE[0]}x{TARGET_SIZE[1]}.keras'
 
-# ✅ Hugging Face model download URL (direct download)
-MODEL_DOWNLOAD_URL = (
-    "https://huggingface.co/bhugifvyjfyfyyyyyyyyyy/"
-    "unet_oil_spill_segmentation_model_128x128/resolve/main/"
-    "unet_oil_spill_segmentation_model_128x128.keras"
-)
-
-# Candidate default paths
+# Model is ALREADY in repo → no download
 DEFAULT_MODEL_PATHS = [
-    os.getenv("MODEL_PATH"),
-    os.path.join(os.path.dirname(__file__), MODEL_FILENAME),
-    os.path.join(os.path.dirname(__file__), "models", MODEL_FILENAME),
-    os.path.join("/app", MODEL_FILENAME),
+    os.path.join(os.path.dirname(__file__), MODEL_FILENAME),            # repo root
+    os.path.join(os.path.dirname(__file__), "models", MODEL_FILENAME),  # models/
 ]
 
 # --- Helper Functions --- #
@@ -33,73 +23,45 @@ def load_model_from_path(model_path: str):
         return None
     try:
         try:
-            tf.keras.mixed_precision.set_global_policy('mixed_float16')
+            tf.keras.mixed_precision.set_global_policy("mixed_float16")
         except Exception:
             pass
 
-        model = tf.keras.models.load_model(model_path, compile=False)
-        return model
+        return tf.keras.models.load_model(model_path, compile=False)
     except Exception as e:
         st.exception(f"Error loading model from {model_path}: {e}")
         return None
 
 
-def download_model_if_needed(download_url: str, save_dir: str, filename: str):
-    os.makedirs(save_dir, exist_ok=True)
-    dest_path = os.path.join(save_dir, filename)
-
-    if os.path.exists(dest_path):
-        return dest_path
-
-    try:
-        with requests.get(download_url, stream=True, timeout=60) as r:
-            r.raise_for_status()
-            with open(dest_path, 'wb') as f:
-                for chunk in r.iter_content(chunk_size=8192):
-                    if chunk:
-                        f.write(chunk)
-        return dest_path
-    except Exception as e:
-        st.error(f"Failed to download model: {e}")
-        return None
-
-
 def find_existing_model_path():
-    for p in DEFAULT_MODEL_PATHS:
-        if p and os.path.exists(p):
-            return p
+    for path in DEFAULT_MODEL_PATHS:
+        if os.path.exists(path):
+            return path
     return None
 
 
 def preprocess_image_for_prediction(image):
-    img_np = np.array(image.convert('L'))
-    img_resized = PIL.Image.fromarray(img_np).resize(TARGET_SIZE, PIL.Image.LANCZOS)
-    img_normalized = img_resized / 255.0
-    img_processed = np.expand_dims(img_normalized, axis=(0, -1))
-    return img_processed
+    img = np.array(image.convert("L"))
+    img = PIL.Image.fromarray(img).resize(TARGET_SIZE, PIL.Image.LANCZOS)
+    img = img / 255.0
+    return np.expand_dims(img, axis=(0, -1))
 
 
-def postprocess_mask_prediction(prediction_output, original_size):
-    mask_np = prediction_output.squeeze()
-    mask_binary = (mask_np > 0.5).astype(np.float32)
-    mask_pil = PIL.Image.fromarray((mask_binary * 255).astype(np.uint8))
-    mask_resized = mask_pil.resize(original_size, PIL.Image.NEAREST)
-    return np.array(mask_resized)
+def postprocess_mask_prediction(prediction, original_size):
+    mask = (prediction.squeeze() > 0.5).astype(np.uint8) * 255
+    mask = PIL.Image.fromarray(mask).resize(original_size, PIL.Image.NEAREST)
+    return np.array(mask)
 
 
-def overlay_mask_on_image(original_image_rgb, predicted_mask, color=(0, 255, 0), alpha=0.5):
-    if predicted_mask.ndim == 3:
-        predicted_mask = predicted_mask.squeeze()
-
-    h, w = original_image_rgb.shape[:2]
-    overlay = np.zeros((h, w, 3), dtype=np.uint8)
-    mask_bool = predicted_mask > 0
+def overlay_mask_on_image(image_rgb, mask, color=(0, 255, 0), alpha=0.5):
+    overlay = np.zeros_like(image_rgb)
+    mask_bool = mask > 0
 
     for c in range(3):
-        overlay[mask_bool, c] = color[c]
+        overlay[..., c][mask_bool] = color[c]
 
-    blended = original_image_rgb * (1 - alpha) + overlay * alpha
-    return np.clip(blended, 0, 255).astype(np.uint8)
+    blended = image_rgb * (1 - alpha) + overlay * alpha
+    return blended.astype(np.uint8)
 
 
 # --- Streamlit UI --- #
@@ -109,59 +71,53 @@ def app_main():
 
     model = None
 
-    # ✅ Auto-download model from Hugging Face
-    st.info("Downloading model from Hugging Face (first run only)...")
-    model_path = download_model_if_needed(
-        MODEL_DOWNLOAD_URL,
-        os.path.join(os.path.dirname(__file__), "models"),
-        MODEL_FILENAME
-    )
-
+    # ✅ Load model from repo
+    model_path = find_existing_model_path()
     if model_path:
+        st.success(f"Loaded model from repo: {os.path.basename(model_path)}")
         model = load_model_from_path(model_path)
+    else:
+        st.error("Model file not found in repository.")
 
-    st.subheader("Model")
-    uploaded_model_file = st.file_uploader(
-        "Upload .keras or .h5 model (optional override)",
-        type=["keras", "h5"]
+    uploaded_file = st.file_uploader(
+        "Choose an image", type=["png", "jpg", "jpeg"]
     )
 
-    if uploaded_model_file is not None:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".keras") as tfp:
-            tfp.write(uploaded_model_file.getvalue())
-            model = load_model_from_path(tfp.name)
+    if uploaded_file and model:
+        image = PIL.Image.open(uploaded_file)
+        st.image(image, caption="Uploaded Image", use_column_width=True)
 
-    uploaded_file = st.file_uploader("Choose an image", type=["png", "jpg", "jpeg"])
+        with st.spinner("Detecting oil spill..."):
+            processed = preprocess_image_for_prediction(image)
+            prediction = model.predict(processed)
+            mask = postprocess_mask_prediction(prediction, image.size)
 
-    if uploaded_file is not None:
-        original_image = PIL.Image.open(uploaded_file)
-        st.image(original_image, caption="Uploaded Image", use_column_width=True)
-        original_size = original_image.size
+            if np.any(mask > 0):
+                st.success("Oil Spill Detected!")
+            else:
+                st.info("No Oil Spill Detected.")
 
-        if model is not None:
-            with st.spinner("Detecting oil spill..."):
-                processed = preprocess_image_for_prediction(original_image)
-                prediction = model.predict(processed)
-                mask = postprocess_mask_prediction(prediction, original_size)
+            overlay = overlay_mask_on_image(
+                np.array(image.convert("RGB")),
+                mask
+            )
 
-                if np.any(mask > 0):
-                    st.success("Oil Spill Detected!")
-                else:
-                    st.info("No Oil Spill Detected.")
+            col1, col2 = st.columns(2)
+            with col1:
+                st.image(mask, caption="Predicted Mask", use_column_width=True)
+            with col2:
+                st.image(overlay, caption="Overlay Result", use_column_width=True)
 
-                overlay = overlay_mask_on_image(
-                    np.array(original_image.convert("RGB")),
-                    mask
-                )
-
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.image(mask, caption="Predicted Mask", use_column_width=True)
-                with col2:
-                    st.image(overlay, caption="Overlay Result", use_column_width=True)
-
-        else:
-            st.error("Model could not be loaded.")
+            # Downloads
+            st.subheader("Download Results")
+            buf = BytesIO()
+            PIL.Image.fromarray(mask).save(buf, format="PNG")
+            st.download_button(
+                "Download Mask",
+                buf.getvalue(),
+                "predicted_mask.png",
+                "image/png"
+            )
 
 
 if __name__ == "__main__":
