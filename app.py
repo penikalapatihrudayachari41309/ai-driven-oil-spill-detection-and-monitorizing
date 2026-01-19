@@ -8,13 +8,12 @@ from io import BytesIO
 # --- Configuration --- #
 TARGET_SIZE = (128, 128)
 
-# ✅ EXACT filename as in your GitHub repo
+# ✅ Exact filename from repo
 MODEL_FILENAME = "unet_oil_spill_segmentation_model_128x128 (3).keras"
 
-# Model is ALREADY in repo → no download
 DEFAULT_MODEL_PATHS = [
-    os.path.join(os.path.dirname(__file__), MODEL_FILENAME),            # repo root
-    os.path.join(os.path.dirname(__file__), "models", MODEL_FILENAME),  # models/
+    os.path.join(os.path.dirname(__file__), MODEL_FILENAME),
+    os.path.join(os.path.dirname(__file__), "models", MODEL_FILENAME),
 ]
 
 # --- Helper Functions --- #
@@ -42,15 +41,21 @@ def find_existing_model_path():
 
 
 def preprocess_image_for_prediction(image):
-    img = np.array(image.convert("L"))
-    img = PIL.Image.fromarray(img).resize(TARGET_SIZE, PIL.Image.LANCZOS)
-    img = img / 255.0
-    return np.expand_dims(img, axis=(0, -1))
+    # ✅ Force NumPy + float32 (FIX)
+    img = np.array(image.convert("L"), dtype=np.float32)
+    img = PIL.Image.fromarray(img.astype(np.uint8)).resize(
+        TARGET_SIZE, PIL.Image.LANCZOS
+    )
+    img = np.array(img, dtype=np.float32) / 255.0
+    img = np.expand_dims(img, axis=(0, -1))
+    return img
 
 
 def postprocess_mask_prediction(prediction, original_size):
     mask = (prediction.squeeze() > 0.5).astype(np.uint8) * 255
-    mask = PIL.Image.fromarray(mask).resize(original_size, PIL.Image.NEAREST)
+    mask = PIL.Image.fromarray(mask).resize(
+        original_size, PIL.Image.NEAREST
+    )
     return np.array(mask)
 
 
@@ -72,19 +77,20 @@ def app_main():
 
     model = None
 
-    # ✅ Load model from repo
+    # Load model from repo
     model_path = find_existing_model_path()
     if model_path:
-        st.success(f"Loaded model from repo: {os.path.basename(model_path)}")
+        st.success(f"Loaded model: {os.path.basename(model_path)}")
         model = load_model_from_path(model_path)
     else:
         st.error("Model file not found in repository.")
+        return
 
     uploaded_file = st.file_uploader(
         "Choose an image", type=["png", "jpg", "jpeg"]
     )
 
-    if uploaded_file and model:
+    if uploaded_file is not None:
         image = PIL.Image.open(uploaded_file)
         st.image(image, caption="Uploaded Image", use_column_width=True)
 
@@ -109,7 +115,7 @@ def app_main():
             with col2:
                 st.image(overlay, caption="Overlay Result", use_column_width=True)
 
-            # Downloads
+            # Download
             st.subheader("Download Results")
             buf = BytesIO()
             PIL.Image.fromarray(mask).save(buf, format="PNG")
