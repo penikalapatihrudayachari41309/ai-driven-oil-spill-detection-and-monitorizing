@@ -7,8 +7,21 @@ from io import BytesIO
 
 # --- Configuration --- #
 TARGET_SIZE = (128, 128)
-dataset_path = '/content/drive/MyDrive/Deep SAR (SOS) Dataset/'
-model_save_path = os.path.join(dataset_path, f'unet_oil_spill_segmentation_model_{TARGET_SIZE[0]}x{TARGET_SIZE[1]}.keras')
+
+# The model file is in the same directory as the app
+model_save_path = os.path.join(os.getcwd(), f'unet_oil_spill_segmentation_model_{TARGET_SIZE[0]}x{TARGET_SIZE[1]}.keras')
+
+# Verify model exists
+if not os.path.exists(model_save_path):
+    # Try alternative paths
+    alt_paths = [
+        os.path.join(os.path.dirname(__file__), f'unet_oil_spill_segmentation_model_{TARGET_SIZE[0]}x{TARGET_SIZE[1]}.keras'),
+        os.path.join('/workspaces/ai-driven-oil-spill-detection-and-monitorizing', f'unet_oil_spill_segmentation_model_{TARGET_SIZE[0]}x{TARGET_SIZE[1]}.keras'),
+    ]
+    for alt_path in alt_paths:
+        if os.path.exists(alt_path):
+            model_save_path = alt_path
+            break
 
 # --- Helper Functions --- #
 @st.cache_resource
@@ -123,3 +136,4 @@ def app_main():
             st.error("Model could not be loaded. Please check the console for errors.")
 
 if __name__ == "__main__":
+    app_main()
